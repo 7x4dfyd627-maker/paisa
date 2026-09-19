@@ -328,6 +328,25 @@
 <div class="toast" id="toast"></div>
 
 <script>
+/* ================= safety net: never a blank screen ================= */
+(function(){
+  function show(msg){
+    try{
+      let d=document.getElementById("fatal");
+      if(!d){ d=document.createElement("div"); d.id="fatal";
+        d.style.cssText="position:fixed;left:0;right:0;top:0;z-index:9999;background:#FDECEC;color:#8A1F1B;padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 12px;font:13px -apple-system,sans-serif;border-bottom:1px solid #D64541";
+        document.body ? document.body.appendChild(d) : document.addEventListener("DOMContentLoaded",()=>document.body.appendChild(d));
+      }
+      d.innerHTML="<b>Paisa hit an error.</b> "+String(msg).replace(/[<>]/g,"")+"<br><span style='font-size:12px'>Your data is still stored. Copy it as a backup below, then send this message to get the app fixed.</span>"+
+        "<div style='margin-top:8px;display:flex;gap:8px'><button id='fatal-copy' style='padding:8px 12px;border:none;border-radius:8px;background:#0A6B54;color:#fff;font-weight:600'>Copy backup</button><button id='fatal-hide' style='padding:8px 12px;border:none;border-radius:8px;background:#fff'>Hide</button></div>";
+      document.getElementById("fatal-copy").onclick=async()=>{ const raw=(localStorage.getItem("paisa-v2")||localStorage.getItem("paisa-v1")||""); try{ await navigator.clipboard.writeText(raw); alert("Backup copied ("+Math.round(raw.length/1024)+" KB). Paste it into Notes."); }catch(e){ prompt("Select all and copy:", raw); } };
+      document.getElementById("fatal-hide").onclick=()=>d.remove();
+    }catch(e){}
+  }
+  window.addEventListener("error", e=>show(e.message+(e.lineno?" (line "+e.lineno+")":"")));
+  window.addEventListener("unhandledrejection", e=>show(e.reason && e.reason.message ? e.reason.message : String(e.reason)));
+  window.__showFatal=show;
+})();
 /* ================= state & storage ================= */
 const CURRENCIES = ["AED","PKR","USD","EUR","GBP","SAR","INR"];
 const DEFAULT_CATS = [
@@ -369,7 +388,7 @@ function migrateV1(o){
   return s;
 }
 function saveState(){ try{ localStorage.setItem("paisa-v2", JSON.stringify(S)); }catch(e){ mem=S; } }
-const APP_VERSION = "Paisa v5.0.1 · statement ledger 2026-09-19";
+const APP_VERSION = "Paisa v5.0.2 · statement ledger 2026-09-20";
 let S = loadState();
 if(!S.imports) S.imports=[];
 if(!S.statements) S.statements=[];
@@ -1771,8 +1790,9 @@ if(navigator.storage && navigator.storage.persist){
 }
 
 /* ================= init ================= */
-postDueRecurring();
-renderHome(); renderSettings();
+try{ postDueRecurring(); }catch(e){ window.__showFatal("Recurring entries: "+e.message); }
+try{ renderHome(); }catch(e){ window.__showFatal("Home screen: "+e.message); }
+try{ renderSettings(); }catch(e){ window.__showFatal("Settings: "+e.message); }
 </script>
 </body>
 </html>

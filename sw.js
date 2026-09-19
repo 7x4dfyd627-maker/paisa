@@ -1,6 +1,6 @@
 /* Paisa service worker — offline support with clean updates.
    Bump CACHE_VERSION whenever index.html changes. */
-const CACHE_VERSION = "paisa-v5.0.1";
+const CACHE_VERSION = "paisa-v5.0.2";
 const CORE = [
   "./",
   "./index.html",
