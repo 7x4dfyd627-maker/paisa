@@ -388,7 +388,7 @@ function migrateV1(o){
   return s;
 }
 function saveState(){ try{ localStorage.setItem("paisa-v2", JSON.stringify(S)); }catch(e){ mem=S; } }
-const APP_VERSION = "Paisa v5.0.2 · statement ledger 2026-09-20";
+const APP_VERSION = "Paisa v5.1 · card statements 2026-09-20";
 let S = loadState();
 if(!S.imports) S.imports=[];
 if(!S.statements) S.statements=[];
@@ -419,7 +419,7 @@ function flow(t){ // signed effect on its account balance
 }
 
 /* ================= payees ================= */
-const STOPWORDS = /\b(POS|PURCHASE|PYMT|PAYMENT|PMT|ATM|WDL|WITHDRAWAL|CASH|IBFT|IBAN|TRF|TRANSFER|FUNDS?|TO|FROM|VIA|ONLINE|MOBILE|APP|DEBIT|CREDIT|CARD|VISA|MASTERCARD|MC|FT|TT|REF|NR|NO|TXN|TRX|UAEFTS|IPP|POP|CHQ|CHEQUE|CLEARING|CHARGES?|FEE|VAT|SALIK|INWARD|OUTWARD|REMITTANCE|SWIFT|BRANCH|A\/C|AC|ACCT|TELEGRAPHIC|RMA|SALARY|BULK|VALUE|DATE|AED|PKR|USD)\b/g;
+const STOPWORDS = /\b(POS|PURCHASE|PYMT|PAYMENT|PMT|ATM|WDL|WITHDRAWAL|CASH|IBFT|IBAN|TRF|TRANSFER|FUNDS?|TO|FROM|VIA|ONLINE|MOBILE|APP|DEBIT|CREDIT|CARD|VISA|MASTERCARD|MC|FT|TT|REF|NR|NO|TXN|TRX|UAEFTS|IPP|POP|CHQ|CHEQUE|CLEARING|CHARGES?|FEE|VAT|SALIK|INWARD|OUTWARD|REMITTANCE|SWIFT|BRANCH|A\/C|AC|ACCT|TELEGRAPHIC|RMA|SALARY|BULK|VALUE|DATE|AED|PKR|USD|PRIMARY|SUPPLEMENTARY|ARE|UAE|AE|DUBAI|ABU|DHABI|SHARJAH|AJMAN|MYF|TAPT?)\b/g;
 function extractPayee(desc){
   if(!desc) return "";
   let s = desc.toUpperCase().replace(/[#*:\/\\|_,.()\-]+/g," ");
@@ -1318,7 +1318,7 @@ async function processPdf(buf, password){
       $("imp-stage").innerHTML=`<div class="empty"><div class="ic">🤔</div><p>No transaction rows detected.<br>If it's a scanned image statement, export CSV from your bank instead.</p></div>`;
       return;
     }
-    showPreview(parsed.items, "statement", detectAccount(lines), {opening:parsed.opening, closing:parsed.closing, from:parsed.from, to:parsed.to, periodDetected:parsed.periodDetected});
+    showPreview(parsed.items, "statement", detectAccount(lines), {opening:parsed.opening, closing:parsed.closing, from:parsed.from, to:parsed.to, periodDetected:parsed.periodDetected, balanceInferred:parsed.balanceInferred});
   }catch(err){
     if(err && (err.name==="PasswordException" || /password/i.test(err.message||""))){
       const wrong = password!=null;
@@ -1343,7 +1343,7 @@ async function processPdf(buf, password){
   }
 }
 /* ================= account auto-detection ================= */
-const IDLINE_RE = /account\s*(?:no|number)|iban|card\s*number/i;
+const IDLINE_RE = /account\s*(?:no|number)|iban|card\s*(?:account\s*)?(?:no|number)/i;
 function detectAccount(lines){
   // build haystack only from labeled header lines, so IBANs inside transfer
   // narrations can never mis-identify the statement
@@ -1357,21 +1357,23 @@ function detectAccount(lines){
     const flat=l.replace(/[\s\-]/g,"").toUpperCase();
     (flat.match(/AE\d{21}/g)||[]).forEach(x=>cands.add(x));
     (l.match(/\b\d[\d\s\-]{7,}\d\b/g)||[]).forEach(x=>{ const f=x.replace(/[\s\-]/g,""); if(f.length>=9&&f.length<=23) cands.add(f); });
+    (flat.match(/\d{4}[X*]{4,12}\d{4}/g)||[]).forEach(x=>cands.add(x));   // masked card numbers like 4138XXXXXXXX0005
   });
   return { acctId: matches.length===1 ? matches[0].id : null, cands:[...cands].slice(0,6) };
 }
 
 function detectPeriod(lines){
-  const D="(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{1,2}[A-Za-z]{3}\\d{2,4}|\\d{1,2}[ -][A-Za-z]{3,9}[ ,-]+\\d{4})";
-  const re=new RegExp("(?:period|from|for)\\D{0,25}?"+D+"\\s*(?:to|-|–|till|until|through)\\s*"+D,"i");
+  const D="(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{1,2}[A-Za-z]{3}\\d{2,4}|\\d{1,2}(?:st|nd|rd|th)?[ -][A-Za-z]{3,9}[ ,-]+\\d{4})";
+  const fromRe=new RegExp("(?:period|from)\\D{0,40}?"+D,"i");
+  const toRe=new RegExp("(?:\\bto\\b|-|–|till|until|through)\\D{0,40}?"+D,"i");
+  const clean=x=>normDate(x.replace(/(\d)(?:st|nd|rd|th)\b/i,"$1").replace(/,/g," ").replace(/\s+/g," ").trim());
   for(let i=0;i<Math.min(lines.length,200);i++){
-    const str=(lines[i]+" "+(lines[i+1]||"")).replace(/\s+/g," ");
-    const m=str.match(re);
-    if(m){
-      const clean=x=>x.replace(/,/g," ").replace(/\s+/g," ").trim();
-      const a=normDate(clean(m[1])), b=normDate(clean(m[2]));
-      if(a&&b&&a<=b) return {from:a,to:b};
-    }
+    const win=lines.slice(i,i+6).join(" ").replace(/\s+/g," ");
+    const f=win.match(fromRe); if(!f) continue;
+    const rest=win.slice(f.index+f[0].length);
+    const t=rest.match(toRe); if(!t) continue;
+    const a=clean(f[1]), b=clean(t[1]);
+    if(a&&b&&a<=b) return {from:a,to:b};
   }
   return null;
 }
@@ -1380,12 +1382,21 @@ function parseStatementLines(lines){
   const seed=v=>{ prevBal=v; if(stOpening===null) stOpening=v; };
   const CLOSE_RE=/carried forward|closing balance|balance c\/?f|\bc\/f\b/i;
   const period=detectPeriod(lines);
+  let usedBalance=false;
+  const pad=n=>String(n).padStart(2,"0");
+  function inferYear(mo){ if(!period) return new Date().getFullYear(); const fy=+period.from.slice(0,4), ty=+period.to.slice(0,4), tm=+period.to.slice(5,7); return mo>tm ? fy : ty; }
+  function dateFrom(tok){
+    const d=normDate(tok.replace(/\./g,"/")); if(d) return d;
+    const m=tok.match(/^(\d{1,2}) ([A-Za-z]{3})$/); if(!m) return null;
+    const mo=MONTHS.findIndex(x=>x.toLowerCase()===m[2].toLowerCase())+1; if(!mo||+m[1]<1||+m[1]>31) return null;
+    return inferYear(mo)+"-"+pad(mo)+"-"+pad(+m[1]);
+  }
   // Block-based parser: a line starting with a date opens a transaction; following
   // lines (refs, narration) belong to it until the next date. Amounts are strict
   // money tokens (1,234.56 with decimals) so reference numbers are never mistaken.
   const items=[]; let prevBal=null; let block=null;
-  const dateRe=/^(\d{1,2}[\/\-.](?:\d{1,2}|[A-Za-z]{3})[\/\-.]\d{2,4}|\d{1,2}[A-Za-z]{3}\d{2,4}|\d{4}-\d{2}-\d{2}|\d{8})\b/;
-  const skipRe=/brought forward|carried forward|balance (?:b\/?f|c\/?f)|\bb\/f\b|\bc\/f\b|opening balance|closing balance|statement period|page \d|total (?:debits?|credits?)/i;
+  const dateRe=/^(\d{1,2}[\/\-.](?:\d{1,2}|[A-Za-z]{3})[\/\-.]\d{2,4}|\d{1,2}[A-Za-z]{3}\d{2,4}|\d{4}-\d{2}-\d{2}|\d{8}|\d{1,2} [A-Za-z]{3})\b/;
+  const skipRe=/brought forward|carried forward|balance (?:b\/?f|c\/?f)|\bb\/f\b|\bc\/f\b|opening balance|closing balance|statement period|page \d|total (?:debits?|credits?)|primary card|supplementary card|card limit|available limit|payment due|current balance|new balance/i;
   const amtTok=/^-?\(?\d{1,3}(?:,\d{3})*\.\d{2,3}\)?(?:CR|DR|Cr|Dr)?$/;   // 1,234.56 or Mashreq-style 1,234.560
   // Drop the column-header row that every page reprints. Identified by repeating
   // verbatim across pages, carrying 3+ column words and no money — so a genuine
@@ -1422,6 +1433,7 @@ function parseStatementLines(lines){
       for(const n of lineNums) numsAll.push(n);
       toks.forEach(t=>{ if(!amtTok.test(t) && descToks.length<10) descToks.push(t); });
     }
+    const blockText=block.text.join(" ");
     block=null;
     if(!numsAll.length) return;
     let amt=null, type=null;
@@ -1430,8 +1442,8 @@ function parseStatementLines(lines){
     //    Immune to split lines, narration numbers, and totals rows.
     if(prevBal!==null){
       const tryPair=(a,b)=>{ a=Math.abs(a); if(!a) return false;
-        if(Math.abs(prevBal+a-b)<0.005){ amt=a; type="income"; prevBal=b; return true; }
-        if(Math.abs(prevBal-a-b)<0.005){ amt=a; type="expense"; prevBal=b; return true; }
+        if(Math.abs(prevBal+a-b)<0.005){ amt=a; type="income"; prevBal=b; usedBalance=true; return true; }
+        if(Math.abs(prevBal-a-b)<0.005){ amt=a; type="expense"; prevBal=b; usedBalance=true; return true; }
         return false; };
       // stage 1: within the table's own amount/balance line — balance is its last token
       if(numsFirst && numsFirst.length>=2){
@@ -1449,19 +1461,19 @@ function parseStatementLines(lines){
       }
     }
     // repeated balance printed with no movement → not a transaction
-    if(amt===null && prevBal!==null && numsAll.length===1 && Math.abs(numsAll[0].v-prevBal)<0.005) return;
+    if(amt===null && prevBal!==null && numsAll.length===1 && !numsAll[0].cr && Math.abs(numsAll[0].v-prevBal)<0.005 && (usedBalance || /balance/i.test(blockText))) return;
     // 2) Fallback: first money line as [.., amount, balance], resyncing the chain
     if(amt===null){
       const nums=numsFirst;
       if(nums.length>=2){
         const balance=nums[nums.length-1].v;
         amt=Math.abs(nums[nums.length-2].v);
-        if(prevBal!==null) type = balance>prevBal ? "income" : "expense";
+        if(prevBal!==null){ type = balance>prevBal ? "income" : "expense"; usedBalance=true; }
         else if(nums[nums.length-1].cr||nums[nums.length-2].cr) type="income";
         prevBal=balance;
       } else {
         amt=Math.abs(nums[0].v);
-        if(nums[0].cr) type="income";
+        if(nums[0].cr || nums[0].v<0) type="income";
       }
     }
     if(!amt) return;
@@ -1471,7 +1483,7 @@ function parseStatementLines(lines){
   }
   let block2date=null, pending=null, awaitBal=false;
   for(const raw of lines){
-    const line=raw.trim(); if(!line) continue;
+    const line=raw.trim().replace(/(\d)\s+(CR|DR|Cr|Dr)\b/g,"$1$2"); if(!line) continue;   // "104.78 CR" -> "104.78CR"
     const norm=line.replace(/\s+/g," ");            // pdf.js joins text pieces with double spaces
     if(awaitBal){ // a balance label was seen with its figure on the following line
       awaitBal=false;
@@ -1484,8 +1496,13 @@ function parseStatementLines(lines){
       awaitKind=null;
     }
     const dm=line.match(dateRe);
-    const date=dm ? normDate(dm[1].replace(/\./g,"/")) : null;
+    let date=dm ? dateFrom(dm[1]) : null;
+    let dateLen=dm ? dm[0].length : 0;
     if(date){
+      // a second date column right after the first (post date / transaction date): the statement's
+      // balances follow the first (post) date, so keep it and just strip the second from the text
+      const rest=line.slice(dateLen).trim(); const dm2=rest.match(dateRe);
+      if(dm2 && dateFrom(dm2[1])){ dateLen=line.length-rest.length+dm2[0].length; }
       // a trailing text-only line in the open block is usually the NEXT row's
       // title (Mashreq places the title above the date line) — move it forward
       if(block && block.text.length>1 && !continuationLayout){
@@ -1503,7 +1520,7 @@ function parseStatementLines(lines){
         pending=null;
         continue;
       }
-      block={text:[(pending?pending+" ":"")+line.slice(dm[0].length).trim()]};
+      block={text:[(pending?pending+" ":"")+line.slice(dateLen).trim()]};
       pending=null;
       continue;
     }
@@ -1523,7 +1540,7 @@ function parseStatementLines(lines){
   }
   flush();
   const dates=items.map(i=>i.date).sort();
-  return {items, opening:stOpening, closing:stClosing!==null?stClosing:prevBal, closingDerived:stClosing===null,
+  return {items, opening:stOpening, closing:stClosing!==null?stClosing:(usedBalance?prevBal:null), closingDerived:stClosing===null, balanceInferred:usedBalance,
           from: period?period.from:(dates[0]||null), to: period?period.to:(dates[dates.length-1]||null), periodDetected:!!period};
 }
 
@@ -1573,7 +1590,7 @@ function showPreview(items, sourceName, det, meta){
     <div class="card" style="margin-bottom:12px"><div class="inline-form">
       <div style="font-size:13px;font-weight:600;color:var(--ink2)">Statement details${meta&&meta.periodDetected?"":" — check these"}</div>
       <div class="two"><input type="date" id="pv-from" value="${meta&&meta.from?meta.from:(items.map(i=>i.date).sort()[0]||"")}"><input type="date" id="pv-to" value="${meta&&meta.to?meta.to:(items.map(i=>i.date).sort().pop()||"")}"></div>
-      <div class="two"><input type="number" step="any" id="pv-open" placeholder="Opening balance" value="${meta&&meta.opening!=null?meta.opening:""}"><input type="number" step="any" id="pv-close" placeholder="Closing balance" value="${meta&&meta.closing!=null?meta.closing:""}"></div>
+      <div class="two"><input type="number" step="any" id="pv-open" placeholder="Opening balance" value="${meta&&meta.opening!=null?meta.opening:""}"><input type="number" step="any" id="pv-close" placeholder="Closing balance" value="${meta&&meta.closing!=null?meta.closing:(meta&&meta.opening!=null?(()=>{ let i=0,e=0; previewItems.forEach(x=>{ if(x.type==="income") i+=x.amt; else e+=x.amt; }); return Math.round((isCard(defAcct)? meta.opening+e-i : meta.opening+i-e)*100)/100; })():"")}"></div>
       <p style="font-size:12px;color:var(--ink2);margin:0">For a credit card, enter the balances as printed (amount owed). The opening and closing balances anchor this account: the first statement sets the starting balance, later ones must chain from the one before. For a bank export without these figures, copy them from the statement.</p>
     </div></div>
     <div class="field"><label>Into account</label><select id="pv-acct">${acctOptions(defAcct)}</select>
@@ -1590,7 +1607,7 @@ function showPreview(items, sourceName, det, meta){
     <p style="font-size:12px;color:var(--ink2);margin:0 4px 10px" id="pv-note"></p>
     <div class="card" style="margin-bottom:10px"><div class="row"><div class="grow"><div class="sub num" id="pv-count"></div></div></div></div>
     <button class="btn primary" id="pv-import">Import selected</button>`;
-  const balanceInferred = sourceName==="statement";   // PDF direction comes from running balance; CSV debit/credit is explicit
+  const balanceInferred = sourceName==="statement" && !!(meta && meta.balanceInferred);   // only when direction came from a running balance
   let pvWasCard = isCard(defAcct);
   if(pvWasCard && balanceInferred) previewItems.forEach(x=>x.type = x.type==="income"?"expense":"income");
   computeDupes(defAcct);
@@ -1610,7 +1627,14 @@ function showPreview(items, sourceName, det, meta){
       ? "Card account: purchases should show as − Out and your bill payments as ＋ In. If they look reversed, tap Flip in/out. Bill payments will be linked to your bank automatically after import."
       : "Rows with a known payee keep that payee's saved category. After import, transfers between your accounts are matched automatically — including AED ⇄ PKR at your exchange rates.";
   }
+  const closeDerived = !!(meta && meta.closing==null && meta.opening!=null);
+  function deriveClose(){
+    if(!closeDerived) return;
+    let i=0,e=0; previewItems.forEach(x=>{ if(x.type==="income") i+=x.amt; else e+=x.amt; });
+    $("pv-close").value = Math.round((isCard($("pv-acct").value)? meta.opening+e-i : meta.opening+i-e)*100)/100;
+  }
   $("pv-acct").addEventListener("change", ()=>{
+    deriveClose();
     const nowCard = isCard($("pv-acct").value);
     if(nowCard!==pvWasCard && balanceInferred){ previewItems.forEach(x=>x.type = x.type==="income"?"expense":"income"); }
     pvWasCard=nowCard;
